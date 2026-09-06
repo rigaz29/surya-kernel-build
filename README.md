@@ -1,128 +1,132 @@
 # surya-kernel-build
 
-Perkakas dan dokumentasi untuk membangun kernel **Xiaomi Poco X3 NFC (`surya`)** dari
+Tooling and documentation for building the **Xiaomi Poco X3 NFC (`surya`)** kernel from
 [`rigaz29/kernel_xiaomi_surya`](https://github.com/rigaz29/kernel_xiaomi_surya)
-dan mengemasnya menjadi zip [AnyKernel3](https://github.com/osm0sis/AnyKernel3) yang bisa di-flash.
+and packaging it into a flashable [AnyKernel3](https://github.com/osm0sis/AnyKernel3) zip.
 
-Repo ini **tidak** berisi source kernel — hanya resep build, skrip, dan tools.
+This repo does **not** contain the kernel source — only the build recipe, scripts and tools.
 
 | | |
 |---|---|
-| Perangkat | Xiaomi Poco X3 NFC (`surya`, juga `karna`) |
-| SoC | Qualcomm SM7150 / `sdmmagpie` (tree `sm8150`) |
+| Device | Xiaomi Poco X3 NFC (`surya`, also `karna`) |
+| SoC | Qualcomm SM7150 / `sdmmagpie` (`sm8150` tree) |
 | Kernel | Linux 4.14.357 (ELTS / OpenELA) |
 | Source | [`rigaz29/kernel_xiaomi_surya`](https://github.com/rigaz29/kernel_xiaomi_surya), branch `seventeen` |
 | Upstream | [`LineageOS/android_kernel_qcom_sm8150`](https://github.com/LineageOS/android_kernel_qcom_sm8150), branch `lineage-20` |
-| Root | [ReSukiSU](https://github.com/ReSukiSU/ReSukiSU) `v4.2.0-rc1-88695111`, manual hook |
+| Root | [ReSukiSU](https://github.com/ReSukiSU/ReSukiSU) `v4.2.0-rc1-88695111`, manual hooks |
 
-## Isi repo
+## Repo layout
 
 ```
-build.sh            # konfigurasi + kompilasi kernel
-package.sh          # rakit zip AnyKernel3 dari hasil build
-anykernel/          # AnyKernel3 yang sudah dikonfigurasi untuk surya
-tools/mkdtboimg.py  # pembuat dtbo.img (AOSP libufdt)
+build.sh            # configure + compile the kernel
+package.sh          # assemble the AnyKernel3 zip from the build output
+anykernel/          # AnyKernel3, pre-configured for surya
+tools/mkdtboimg.py  # dtbo.img builder (AOSP libufdt)
 ```
 
-Toolchain (Proton Clang, ±1.6 GB) sengaja tidak ikut di-commit; `build.sh` mengunduhnya
-otomatis saat pertama dijalankan.
+The toolchain (Proton Clang, ~1.6 GB) is deliberately not committed; `build.sh`
+downloads it automatically on first run.
 
-## Prasyarat
+## Prerequisites
 
-Diuji di Ubuntu 24.04 (glibc 2.39, binutils 2.42):
+Tested on Ubuntu 24.04 (glibc 2.39, binutils 2.42):
 
 ```bash
 sudo apt install -y git make zip python3 device-tree-compiler \
                     build-essential libssl-dev bc bison flex
 ```
 
-`device-tree-compiler` **wajib** — lihat [Kendala 2](#kendala-2-dtc-in-tree-terlalu-tua).
+`device-tree-compiler` is **required** — see [Issue 2](#issue-2-the-in-tree-dtc-is-too-old).
 
-## Cara pakai
+## Usage
 
 ```bash
 git clone https://github.com/rigaz29/kernel_xiaomi_surya.git ~/surya/kernel_xiaomi_surya
 git clone https://github.com/rigaz29/surya-kernel-build.git ~/surya/surya-kernel-build
 
 cd ~/surya/surya-kernel-build
-./build.sh        # unduh toolchain (sekali), defconfig, kompilasi
-./package.sh      # hasilkan release/Stormbreaker-surya-<versi>-<tanggal>.zip
+./build.sh        # fetch the toolchain (once), defconfig, compile
+./package.sh      # produce release/Stormbreaker-surya-<version>-<date>.zip
 ```
 
-Variabel yang bisa di-override: `KERNEL_DIR`, `TC_DIR`, `DEFCONFIG`, `JOBS`, `DTC_EXT`, `DEST`.
+Overridable variables: `KERNEL_DIR`, `TC_DIR`, `DEFCONFIG`, `JOBS`, `DTC_EXT`, `DEST`,
+`KSU_COMMIT`.
 
 ```bash
-KERNEL_DIR=/path/ke/kernel JOBS=8 ./build.sh
+KERNEL_DIR=/path/to/kernel JOBS=8 ./build.sh
 ```
 
 ## Toolchain
 
-| Komponen | Versi |
+| Component | Version |
 |---|---|
 | Compiler | Proton Clang 13.0.0 ([`kdrag0n/proton-clang`](https://github.com/kdrag0n/proton-clang)) |
 | Linker (target) | LLD 13.0.0 |
-| Linker (host) | binutils sistem (2.42) |
-| Binutils cross | `aarch64-linux-gnu-`, `arm-linux-gnueabi-` |
-| dtc | dtc sistem 1.7.0 (**bukan** `scripts/dtc` in-tree) |
+| Linker (host) | system binutils (2.42) |
+| Cross binutils | `aarch64-linux-gnu-`, `arm-linux-gnueabi-` |
+| dtc | system dtc 1.7.0 (**not** the in-tree `scripts/dtc`) |
 
-Clang 13 dipilih karena cocok dengan kernel 4.14 yang memakai ThinLTO + Shadow Call Stack.
-Clang yang jauh lebih baru sering menolak kode kernel seusia ini. Perlu dicatat: build resmi
-Stormbreaker kemungkinan memakai Clang lain, jadi biner hasil repo ini **tidak akan identik byte-per-byte**.
+Clang 13 was chosen because it matches this 4.14 kernel, which uses ThinLTO plus
+Shadow Call Stack. Much newer Clang releases tend to reject kernel code of this age.
+Note that the official Stormbreaker builds likely use a different Clang, so binaries
+produced from this repo will **not** be byte-for-byte identical to theirs.
 
-## Konfigurasi kernel yang relevan
+## Relevant kernel configuration
 
-Dari `arch/arm64/configs/surya_defconfig`:
+From `arch/arm64/configs/surya_defconfig`:
 
-| Opsi | Nilai | Dampak |
+| Option | Value | Effect |
 |---|---|---|
-| `CONFIG_LTO_CLANG` / `CONFIG_THINLTO` | `y` | butuh `ld.lld` (Makefile memakai `--thinlto-cache-dir`) |
-| `CONFIG_SHADOW_CALL_STACK` | `y` | butuh Clang dengan dukungan SCS arm64 |
-| `CONFIG_CFI_CLANG` | tidak diset | — |
-| `CONFIG_BUILD_ARM64_DT_OVERLAY` | `y` | build menghasilkan `.dtbo`, `DTC_FLAGS := -@` |
-| `CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE` | **tidak diset** | output `Image.gz` polos, **bukan** `Image.gz-dtb` |
-| `CONFIG_LOCALVERSION` | `-Stormbreaker` | masuk ke string versi kernel |
+| `CONFIG_LTO_CLANG` / `CONFIG_THINLTO` | `y` | requires `ld.lld` (the Makefile uses `--thinlto-cache-dir`) |
+| `CONFIG_SHADOW_CALL_STACK` | `y` | requires a Clang with arm64 SCS support |
+| `CONFIG_CFI_CLANG` | not set | — |
+| `CONFIG_BUILD_ARM64_DT_OVERLAY` | `y` | the build produces `.dtbo`, `DTC_FLAGS := -@` |
+| `CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE` | **not set** | output is a plain `Image.gz`, **not** `Image.gz-dtb` |
+| `CONFIG_LOCALVERSION` | `-Stormbreaker` | becomes part of the kernel version string |
 
-## Artefak dan cara AnyKernel3 memakainya
+## Artifacts and how AnyKernel3 uses them
 
-| File di zip | Sumber | Peran |
+| File in the zip | Source | Role |
 |---|---|---|
-| `Image.gz` | `out/arch/arm64/boot/Image.gz` | kernel; ditulis ke boot image |
-| `dtb` | `out/.../qcom/surya-sdmmagpie.dtb` | menggantikan bagian dtb di boot image (surya: boot header v2) |
-| `dtbo.img` | dibuat dari `surya-sdmmagpie-overlay.dtbo` | di-flash ke partisi `dtbo` oleh `write_boot` |
+| `Image.gz` | `out/arch/arm64/boot/Image.gz` | the kernel; written into the boot image |
+| `dtb` | `out/.../qcom/surya-sdmmagpie.dtb` | replaces the dtb section of the boot image (surya uses boot header v2) |
+| `dtbo.img` | built from `surya-sdmmagpie-overlay.dtbo` | flashed to the `dtbo` partition by `write_boot` |
 
-`dtb` dan `dtbo.img` dibangun dari source yang sama dengan kernelnya, jadi konsisten
-(merge upstream terakhir memang mengubah dts: referensi coresight dan region
-`disp_rdump_memory`). Kalau Anda lebih suka mempertahankan bawaan perangkat,
-hapus saja kedua file itu dari zip — AnyKernel3 otomatis memakai yang lama.
+`dtb` and `dtbo.img` are built from the same source as the kernel, so they stay
+consistent (the last upstream merge did change the dts: coresight references and the
+`disp_rdump_memory` region). If you would rather keep the device's own copies, simply
+delete those two files from the zip — AnyKernel3 falls back to the existing ones.
 
-Konfigurasi `anykernel/anykernel.sh`:
+`anykernel/anykernel.sh` configuration:
 
 ```
 device.name1=surya
 device.name2=karna
 BLOCK=/dev/block/bootdevice/by-name/boot
-IS_SLOT_DEVICE=0        # surya non-A/B
+IS_SLOT_DEVICE=0        # surya is non-A/B
 do.devicecheck=1
 ```
 
-## Integrasi ReSukiSU
+## ReSukiSU integration
 
-Kernel ini sudah terintegrasi dengan [ReSukiSU](https://github.com/ReSukiSU/ReSukiSU)
-(turunan KernelSU) mengikuti [dokumentasi resminya](https://resukisu.org/guide/manual-integrate.html).
+This kernel is integrated with [ReSukiSU](https://github.com/ReSukiSU/ReSukiSU)
+(a KernelSU derivative) following its
+[official documentation](https://resukisu.org/guide/manual-integrate.html).
 
-Driver-nya **tidak** ikut di-commit ke tree kernel. `build.sh` mengambilnya lewat
-`kernel/setup.sh` resmi dan **mem-pin commit** `88695111` (override dengan `KSU_COMMIT=`),
-supaya hasil build tetap reproducible walau branch `main` upstream bergerak.
+The driver itself is **not** committed into the kernel tree. `build.sh` fetches it
+through the official `kernel/setup.sh` and **pins the commit** to `88695111`
+(override with `KSU_COMMIT=`), so builds stay reproducible even as the upstream
+`main` branch moves.
 
-### Kenapa manual hook
+### Why manual hooks
 
-| Metode | Dipakai? | Alasan |
+| Method | Used? | Reason |
 |---|---|---|
-| `KSU_TRACEPOINT_HOOK` | tidak | hanya untuk GKI2 (kernel 5.10+) |
-| `KSU_MANUAL_HOOK` | **ya** | mendukung kernel 3.4+, cocok untuk 4.14 non-GKI |
-| `KSU_SUSFS` | tidak | upstream menyatakan SUSFS tidak lagi mendukung NonGKI tanpa backport manual dari branch `gki-android12-5.10` |
+| `KSU_TRACEPOINT_HOOK` | no | GKI2 only (kernel 5.10+) |
+| `KSU_MANUAL_HOOK` | **yes** | supports kernel 3.4+, which fits this non-GKI 4.14 tree |
+| `KSU_SUSFS` | no | upstream states SUSFS no longer supports NonGKI without manually backporting the patches from the `gki-android12-5.10` branch |
 
-Opsi defconfig yang ditambahkan:
+Defconfig options added:
 
 ```
 # ReSukiSU
@@ -130,30 +134,32 @@ CONFIG_KSU=y
 CONFIG_KSU_MANUAL_HOOK=y
 ```
 
-### Hook yang dipatch manual
+### Manually patched hooks
 
-| File | Fungsi | Hook |
+| File | Function | Hook |
 |---|---|---|
 | `fs/stat.c` | `newfstatat`, `fstatat64` | `ksu_handle_stat` |
 | `fs/stat.c` | `newfstat` | `ksu_handle_newfstat_ret` |
 | `fs/stat.c` | `fstat64` | `ksu_handle_fstat64_ret` |
-| `fs/exec.c` | `do_execveat_common` | `ksu_handle_execveat` (varian 3.14+) |
-| `fs/open.c` | `SYSCALL_DEFINE3(faccessat)` | `ksu_handle_faccessat` (varian 4.19-) |
-| `kernel/reboot.c` | `SYSCALL_DEFINE4(reboot)` | `ksu_handle_sys_reboot` (varian 3.11+) |
+| `fs/exec.c` | `do_execveat_common` | `ksu_handle_execveat` (3.14+ variant) |
+| `fs/open.c` | `SYSCALL_DEFINE3(faccessat)` | `ksu_handle_faccessat` (4.19- variant) |
+| `kernel/reboot.c` | `SYSCALL_DEFINE4(reboot)` | `ksu_handle_sys_reboot` (3.11+ variant) |
 
-### Yang sengaja TIDAK dipatch manual
+### Deliberately NOT patched manually
 
-- **setuid**, **sys_read**, **input** — ditangani otomatis oleh `KSU_MANUAL_HOOK_AUTO_SETUID_HOOK`,
-  `..._AUTO_INITRC_HOOK`, dan `..._AUTO_INPUT_HOOK` (semua default `y`). Auto-hook LSM ini hanya
-  invalid untuk kernel >= 6.8; kernel kita 4.14, jadi aman.
-- **Static symbol export SELinux** (`write_op`, `sel_handle_status_ops`, `policy_rwlock`,
-  `sel_mutex`, dll.) — tidak perlu karena `CONFIG_KALLSYMS_ALL=y` sudah aktif di
-  `surya_defconfig`, dan dokumentasi menyebut opsi itu menggantikan seluruh perubahan tersebut.
+- **setuid**, **sys_read**, **input** — handled automatically by
+  `KSU_MANUAL_HOOK_AUTO_SETUID_HOOK`, `..._AUTO_INITRC_HOOK` and `..._AUTO_INPUT_HOOK`
+  (all default `y`). These LSM auto-hooks are only invalid on kernels >= 6.8; this
+  kernel is 4.14, so they are safe to rely on.
+- **SELinux static symbol exports** (`write_op`, `sel_handle_status_ops`,
+  `policy_rwlock`, `sel_mutex`, etc.) — unnecessary because `CONFIG_KALLSYMS_ALL=y`
+  is already enabled in `surya_defconfig`, and the documentation states that option
+  replaces all of those changes.
 
-### Verifikasi
+### Verification
 
-ReSukiSU menjalankan pemeriksa hook saat kompilasi dan menggagalkan build bila ada yang
-tidak cocok. Semua lolos:
+ReSukiSU runs a hook checker at compile time and fails the build if anything does not
+match. All of them passed:
 
 ```
 -- ReSukiSU/manual_hook: ksu_handle_execveat found
@@ -164,21 +170,21 @@ tidak cocok. Semua lolos:
 -- ReSukiSU/manual_hook: ksu_handle_sys_reboot found
 ```
 
-Versi yang tertanam di kernel: `v4.2.0-rc1-88695111@ReSukiSU`.
+Version embedded in the kernel: `v4.2.0-rc1-88695111@ReSukiSU`.
 
-Setelah flash, pasang **manager APK** ReSukiSU dari
-[rilis resminya](https://github.com/ReSukiSU/ReSukiSU/releases) untuk mengelola root.
+After flashing, install the ReSukiSU **manager APK** from its
+[official releases](https://github.com/ReSukiSU/ReSukiSU/releases) to manage root.
 
-## Kendala yang harus diatasi
+## Issues you have to work around
 
-Dua hal ini membuat build gagal kalau tidak ditangani. Keduanya adalah masalah
-lingkungan/tree, bukan bug di kode kernelnya.
+These two will break the build if left unhandled. Both are environment/tree problems,
+not bugs in the kernel code.
 
-### Kendala 1: host linker
+### Issue 1: the host linker
 
-Direktori `bin/` Proton Clang berisi binutils 2.36 dengan nama generik
-(`ld`, `as`, `ar`, `nm`, `objcopy`, …). Kalau ditaruh di **depan** `PATH`, tool itu
-menaungi binutils sistem, dan proses link **host tool** gagal:
+Proton Clang's `bin/` directory ships binutils 2.36 under generic names
+(`ld`, `as`, `ar`, `nm`, `objcopy`, …). Putting it **first** on `PATH` shadows the
+system binutils, and linking the **host tools** fails:
 
 ```
 ld: /lib/x86_64-linux-gnu/libc.so.6: unknown type [0x13] section `.relr.dyn'
@@ -187,23 +193,23 @@ clang-13: error: linker command failed with exit code 1
 make[2]: *** [scripts/Makefile.host:102: scripts/basic/fixdep] Error 1
 ```
 
-`ld` 2.36 belum mengenal section `.relr.dyn` (DT_RELR) yang dipakai glibc modern.
+`ld` 2.36 does not yet understand the `.relr.dyn` (DT_RELR) section used by modern glibc.
 
-**Solusi** — taruh toolchain di **akhir** `PATH` dan biarkan `HOSTCC` default (gcc):
+**Fix** — put the toolchain **last** on `PATH` and leave `HOSTCC` at its default (gcc):
 
 ```bash
 export PATH="$PATH:$TC_DIR/bin"
 ```
 
-Aman karena `clang`, `ld.lld`, dan `llvm-*` namanya unik sehingga tetap terambil
-dari toolchain, sedangkan `ld`/`as` generik jatuh ke binutils sistem yang baru.
-Jangan set `HOSTCC=clang`.
+This is safe because `clang`, `ld.lld` and `llvm-*` have unique names and are still
+picked up from the toolchain, while the generic `ld`/`as` fall through to the newer
+system binutils. Do not set `HOSTCC=clang`.
 
-### Kendala 2: dtc in-tree terlalu tua
+### Issue 2: the in-tree dtc is too old
 
-`surya-sdmmagpie-overlay.dts` adalah overlay (`/plugin/;`) yang mereferensi label
-milik base dtb. `scripts/dtc` di tree ini belum punya dukungan *orphan node*, jadi
-referensi yang belum terselesaikan langsung dianggap error:
+`surya-sdmmagpie-overlay.dts` is an overlay (`/plugin/;`) that references labels
+belonging to the base dtb. The in-tree `scripts/dtc` has no *orphan node* support, so
+unresolved references are treated as hard errors:
 
 ```
 Error: surya-sdmmagpie-overlay.dts:31.1-5 Label or path soc not found
@@ -212,72 +218,72 @@ FATAL ERROR: Syntax error parsing input tree
 make[3]: *** [scripts/Makefile.dtbo:24: ...surya-sdmmagpie-overlay.dtbo] Error 1
 ```
 
-Di `scripts/dtc/dtc-parser.y`, aturan `devicetree DT_REF nodedef` langsung memanggil
-`ERROR(...)` bila `get_node_by_ref()` gagal, tanpa jalur `add_orphan_node()` yang ada
-pada dtc modern.
+In `scripts/dtc/dtc-parser.y`, the `devicetree DT_REF nodedef` rule calls `ERROR(...)`
+directly when `get_node_by_ref()` fails, without the `add_orphan_node()` path that
+modern dtc has.
 
-**Solusi** — pakai dtc sistem lewat `DTC_EXT` (didukung `scripts/Makefile.lib`):
+**Fix** — use the system dtc through `DTC_EXT` (supported by `scripts/Makefile.lib`):
 
 ```bash
 make ... DTC_EXT=/usr/bin/dtc
 ```
 
-Saat `DTC_EXT` diset, Kbuild juga melewatkan flag `-Wno-*` duplikat yang tidak
-dikenali dtc modern, jadi tidak ada penyesuaian lain yang diperlukan.
+When `DTC_EXT` is set, Kbuild also skips the duplicated `-Wno-*` flags that modern dtc
+does not recognise, so no further adjustment is needed.
 
-## Status verifikasi
+## Verification status
 
-Yang sudah diverifikasi:
+What has been verified:
 
-- Kompilasi selesai tanpa error dan **0 warning**.
-- `Image.gz` — gzip valid, 19.0 MB.
-- `dtb` — FDT valid (magic `0xd00dfeed`), 547.8 KB.
-- `dtbo.img` — `dt_table` valid (magic `0xd7b7ab1e`), 1 entry, 2.1 KB.
+- The build completes with no errors and **0 warnings**.
+- `Image.gz` — valid gzip, ~19 MB.
+- `dtb` — valid FDT (magic `0xd00dfeed`), ~548 KB.
+- `dtbo.img` — valid `dt_table` (magic `0xd7b7ab1e`), 1 entry, ~2 KB.
 
-Versi hasil build:
+The resulting version string looks like:
 
 ```
-4.14.357-openela-Stormbreaker-ge06f4b592084
+4.14.357-openela-Stormbreaker-g<short SHA of HEAD>
 ```
 
-Sufiks `ge06f4b592084` adalah commit merge upstream, jadi versi kernel langsung
-menunjukkan isi build-nya.
+`CONFIG_LOCALVERSION_AUTO=y` appends the short SHA of the commit that was built, so the
+version string identifies the exact source state on the device.
 
-> **Belum diuji boot pada perangkat.** Verifikasi berhenti di "kompilasi bersih +
-> artefak valid". Backup partisi `boot` dan `dtbo` sebelum flash.
+> **Not boot-tested by this repo's tooling.** Verification stops at "clean compile +
+> valid artifacts". Back up the `boot` and `dtbo` partitions before flashing.
 
-## Cara flash
+## Flashing
 
-1. Backup `boot` dan `dtbo` (mis. lewat TWRP).
-2. Flash zip lewat custom recovery, atau `adb sideload <zip>`.
-3. Reboot. Cek dengan `uname -r` — harus muncul string versi di atas.
+1. Back up `boot` and `dtbo` (e.g. through TWRP).
+2. Flash the zip from a custom recovery, or `adb sideload <zip>`.
+3. Reboot. Check with `uname -r` — it should show the version string above.
 
-Kalau gagal boot, restore backup `boot` dan `dtbo`.
+If it fails to boot, restore the `boot` and `dtbo` backups.
 
-## Riwayat merge upstream
+## Upstream merge history
 
-Merge `LineageOS/android_kernel_qcom_sm8150:lineage-20` ke `seventeen`
-(commit [`e06f4b5`](https://github.com/rigaz29/kernel_xiaomi_surya/commit/e06f4b592084)):
-41 commit upstream (21 baru, 20 sudah pernah di-cherry-pick), 33 file, +63/−98.
+Merge of `LineageOS/android_kernel_qcom_sm8150:lineage-20` into `seventeen`
+(commit [`d9caf04`](https://github.com/rigaz29/kernel_xiaomi_surya/commit/d9caf04a842628a259f1da20b6afbc4235007d70)):
+41 upstream commits (21 new, 20 previously cherry-picked), 33 files, +63/−98.
 
-Isi: seri backport `clone3()`, `CAP_CHECKPOINT_RESTORE`, perbaikan CFI di rmnet shs,
-pembersihan dts coresight, retry I2C NFC, perbaikan anotasi `__user` di TCP.
+Contents: the `clone3()` backport series, `CAP_CHECKPOINT_RESTORE`, a CFI fix in
+rmnet shs, coresight dts cleanups, NFC I2C retries, and `__user` annotation fixes in TCP.
 
-Lima konflik dan resolusinya:
+The five conflicts and how they were resolved:
 
-| File | Diambil | Alasan |
+| File | Taken from | Reason |
 |---|---|---|
-| `arch/x86/entry/syscalls/syscall_32.tbl` | upstream | `compat_sys_clone3` tidak terdefinisi di tree ini (clone3 hanya `SYSCALL_DEFINE2`), jadi `__ia32_sys_clone3` yang benar |
-| `arch/x86/ia32/sys_ia32.c` | upstream | `compat_sys_x86_waitpid()` memang dihapus upstream |
-| `arch/x86/include/asm/sys_ia32.h` | gabungan | dua penghapusan sekaligus: prototipe waitpid (upstream) + `sys32_vm86_warning` (lokal) |
-| `drivers/nfc/nq-nci.c` | lokal | logika retry identik; versi lokal mencatat `ret` dan `retry_cnt` |
-| `kernel/fork.c` | lokal | `_do_fork` lokal hanya refactor early-return, semantik identik; perubahan upstream lain di file ini tetap masuk |
+| `arch/x86/entry/syscalls/syscall_32.tbl` | upstream | `compat_sys_clone3` is not defined in this tree (clone3 is only a `SYSCALL_DEFINE2`), so `__ia32_sys_clone3` is correct |
+| `arch/x86/ia32/sys_ia32.c` | upstream | `compat_sys_x86_waitpid()` really was removed upstream |
+| `arch/x86/include/asm/sys_ia32.h` | combined | two removals at once: the waitpid prototype (upstream) plus `sys32_vm86_warning` (local) |
+| `drivers/nfc/nq-nci.c` | local | identical retry logic; the local version logs both `ret` and `retry_cnt` |
+| `kernel/fork.c` | local | the local `_do_fork` is only an early-return refactor with identical semantics; other upstream changes in the file are retained |
 
-## Kredit dan lisensi
+## Credits and licensing
 
 - Kernel source: LineageOS, Qualcomm, Xiaomi — GPL-2.0.
-- [AnyKernel3](https://github.com/osm0sis/AnyKernel3) oleh osm0sis — lisensi ada di `anykernel/LICENSE`.
-- `tools/mkdtboimg.py` dari [AOSP libufdt](https://android.googlesource.com/platform/system/libufdt/) — Apache-2.0.
-- [Proton Clang](https://github.com/kdrag0n/proton-clang) oleh kdrag0n.
+- [AnyKernel3](https://github.com/osm0sis/AnyKernel3) by osm0sis — licence in `anykernel/LICENSE`.
+- `tools/mkdtboimg.py` from [AOSP libufdt](https://android.googlesource.com/platform/system/libufdt/) — Apache-2.0.
+- [Proton Clang](https://github.com/kdrag0n/proton-clang) by kdrag0n.
 
-Skrip di repo ini (`build.sh`, `package.sh`) mengikuti GPL-2.0 seperti kernelnya.
+The scripts in this repo (`build.sh`, `package.sh`) follow GPL-2.0, same as the kernel.

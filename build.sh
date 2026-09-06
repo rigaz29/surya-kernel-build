@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Build kernel Xiaomi surya (Poco X3 NFC) - sm8150/sdmmagpie, Linux 4.14 ELTS.
-# Lihat README.md untuk penjelasan tiap keputusan di skrip ini.
+# Build the Xiaomi surya (Poco X3 NFC) kernel - sm8150/sdmmagpie, Linux 4.14 ELTS.
+# See README.md for the reasoning behind each decision in this script.
 #
 set -euo pipefail
 
@@ -11,15 +11,15 @@ TC_URL="https://github.com/kdrag0n/proton-clang.git"
 DEFCONFIG="${DEFCONFIG:-surya_defconfig}"
 JOBS="${JOBS:-$(nproc)}"
 
-[ -d "$KERNEL_DIR" ] || { echo "!! KERNEL_DIR tidak ada: $KERNEL_DIR"; exit 1; }
+[ -d "$KERNEL_DIR" ] || { echo "!! KERNEL_DIR does not exist: $KERNEL_DIR"; exit 1; }
 
 # --- ReSukiSU ----------------------------------------------------------------
-# Driver-nya TIDAK di-commit ke tree kernel; diambil di sini dan di-pin ke commit
-# yang sudah teruji supaya hasil build tetap reproducible.
+# The driver is NOT committed into the kernel tree; it is fetched here and pinned
+# to a tested commit so that builds stay reproducible.
 KSU_COMMIT="${KSU_COMMIT:-88695111}"
 if grep -q '^CONFIG_KSU=y' "$KERNEL_DIR/arch/arm64/configs/$DEFCONFIG" 2>/dev/null \
    && [ ! -f "$KERNEL_DIR/drivers/kernelsu/Makefile" ]; then
-  echo ">> Menyiapkan ReSukiSU ($KSU_COMMIT)"
+  echo ">> Setting up ReSukiSU ($KSU_COMMIT)"
   ( cd "$KERNEL_DIR" && curl -LSs \
       "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" \
       | bash -s "$KSU_COMMIT" )
@@ -27,20 +27,20 @@ fi
 
 # --- toolchain ---------------------------------------------------------------
 if [ ! -x "$TC_DIR/bin/clang" ]; then
-  echo ">> Mengunduh Proton Clang ke $TC_DIR (~1.6 GB, sekali saja)"
+  echo ">> Downloading Proton Clang into $TC_DIR (~1.6 GB, one time only)"
   mkdir -p "$(dirname "$TC_DIR")"
   git clone --depth=1 "$TC_URL" "$TC_DIR"
 fi
 
-# dtc sistem harus cukup baru untuk mendukung orphan node pada overlay dtbo
-# (diuji dengan dtc 1.7.0 dari Ubuntu 24.04). dtc in-tree tidak bisa dipakai.
+# The system dtc must be new enough to support orphan nodes in the dtbo overlay
+# (tested with dtc 1.7.0 from Ubuntu 24.04). The in-tree dtc cannot be used.
 DTC_EXT="${DTC_EXT:-$(command -v dtc || true)}"
-[ -n "$DTC_EXT" ] || { echo "!! dtc tidak ditemukan. Pasang: apt install device-tree-compiler"; exit 1; }
+[ -n "$DTC_EXT" ] || { echo "!! dtc not found. Install it: apt install device-tree-compiler"; exit 1; }
 
-# PENTING: toolchain ditaruh di AKHIR PATH. Kalau di depan, binutils 2.36 bawaan
-# Proton menaungi binutils sistem dan host tool (fixdep) gagal di-link pada
-# glibc >= 2.36 karena section .relr.dyn belum dikenali ld 2.36.
-# clang / ld.lld / llvm-* namanya unik jadi tetap terambil dari toolchain.
+# IMPORTANT: the toolchain goes LAST on PATH. Placed first, Proton's bundled
+# binutils 2.36 shadows the system binutils and linking the host tools (fixdep)
+# fails on glibc >= 2.36 because ld 2.36 does not know the .relr.dyn section.
+# clang / ld.lld / llvm-* have unique names, so they still come from the toolchain.
 export PATH="$PATH:$TC_DIR/bin"
 export KBUILD_BUILD_USER="${KBUILD_BUILD_USER:-$(id -un)}"
 export KBUILD_BUILD_HOST="${KBUILD_BUILD_HOST:-$(hostname)}"
@@ -67,6 +67,6 @@ echo ">> build -j$JOBS"
 make "${MAKE_ARGS[@]}" -j"$JOBS"
 
 echo
-echo ">> Selesai: $(cat out/include/config/kernel.release)"
+echo ">> Done: $(cat out/include/config/kernel.release)"
 ls -la out/arch/arm64/boot/Image.gz out/arch/arm64/boot/dts/qcom/surya-sdmmagpie.dtb \
        out/arch/arm64/boot/dts/qcom/surya-sdmmagpie-overlay.dtbo
