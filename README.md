@@ -13,7 +13,8 @@ This repo does **not** contain the kernel source — only the build recipe, scri
 | Kernel | Linux 4.14.357 (ELTS / OpenELA) |
 | Source | [`rigaz29/kernel_xiaomi_surya`](https://github.com/rigaz29/kernel_xiaomi_surya), branch `seventeen` |
 | Upstream | [`LineageOS/android_kernel_qcom_sm8150`](https://github.com/LineageOS/android_kernel_qcom_sm8150), branch `lineage-20` |
-| Root | [ReSukiSU](https://github.com/ReSukiSU/ReSukiSU) `v4.2.0-rc1-88695111`, manual hooks |
+| Root | [ReSukiSU](https://github.com/ReSukiSU/ReSukiSU) `v4.2.0-rc1-88695111`, SUSFS inline hooks |
+| Hiding | [SUSFS](https://gitlab.com/simonpunk/susfs4ksu) `v2.3.0` (non-GKI 4.14 backport) |
 
 ## Repo layout
 
@@ -118,43 +119,83 @@ through the official `kernel/setup.sh` and **pins the commit** to `88695111`
 (override with `KSU_COMMIT=`), so builds stay reproducible even as the upstream
 `main` branch moves.
 
-### Why manual hooks
+### Hooking method
 
 | Method | Used? | Reason |
 |---|---|---|
 | `KSU_TRACEPOINT_HOOK` | no | GKI2 only (kernel 5.10+) |
-| `KSU_MANUAL_HOOK` | **yes** | supports kernel 3.4+, which fits this non-GKI 4.14 tree |
-| `KSU_SUSFS` | no | upstream states SUSFS no longer supports NonGKI without manually backporting the patches from the `gki-android12-5.10` branch |
+| `KSU_MANUAL_HOOK` | no | superseded — see below |
+| `KSU_SUSFS` | **yes** | SUSFS inline hooks, required for SUSFS support |
+
+ReSukiSU puts all three in the same Kconfig `choice`, so exactly one can be
+active. Manual hooks were used first (commit `58676fa`); enabling SUSFS replaces
+them with inline hooks. Both call the same `ksu_handle_*` entry points, but the
+inline variant gates them behind `susfs_is_current_proc_no_su()` and the
+`ksu_su_compat_enabled` static branch, and resolves paths through
+`filename_lookup()` to avoid a second lookup.
 
 Defconfig options added:
 
 ```
 # ReSukiSU
 CONFIG_KSU=y
-CONFIG_KSU_MANUAL_HOOK=y
+CONFIG_KSU_SUSFS=y
+
+# SUSFS
+CONFIG_KSU_SUSFS_SUS_PATH=y
+CONFIG_KSU_SUSFS_SUS_MOUNT=y
+CONFIG_KSU_SUSFS_SUS_KSTAT=y
+CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+CONFIG_KSU_SUSFS_ENABLE_LOG=y
+CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+CONFIG_KSU_SUSFS_SUS_MAP=y
 ```
 
-### Manually patched hooks
+`KSU_SUSFS` depends on `THREAD_INFO_IN_TASK` and `64BIT`; `arch/arm64/Kconfig`
+already selects the former, so nothing extra is needed.
 
-| File | Function | Hook |
-|---|---|---|
-| `fs/stat.c` | `newfstatat`, `fstatat64` | `ksu_handle_stat` |
-| `fs/stat.c` | `newfstat` | `ksu_handle_newfstat_ret` |
-| `fs/stat.c` | `fstat64` | `ksu_handle_fstat64_ret` |
-| `fs/exec.c` | `do_execveat_common` | `ksu_handle_execveat` (3.14+ variant) |
-| `fs/open.c` | `SYSCALL_DEFINE3(faccessat)` | `ksu_handle_faccessat` (4.19- variant) |
-| `kernel/reboot.c` | `SYSCALL_DEFINE4(reboot)` | `ksu_handle_sys_reboot` (3.11+ variant) |
+## SUSFS integration
 
-### Deliberately NOT patched manually
+Upstream [susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu) still carries a
+`kernel-4.14` branch, but it is no longer maintained alongside the GKI branches,
+and ReSukiSU's own docs say SUSFS "no longer supports NonGKI" without a manual
+backport. The working path for 4.14 is the backport maintained by
+[JackA1ltman/NonGKI_Kernel_Build_2nd](https://github.com/JackA1ltman/NonGKI_Kernel_Build_2nd):
 
-- **setuid**, **sys_read**, **input** — handled automatically by
-  `KSU_MANUAL_HOOK_AUTO_SETUID_HOOK`, `..._AUTO_INITRC_HOOK` and `..._AUTO_INPUT_HOOK`
-  (all default `y`). These LSM auto-hooks are only invalid on kernels >= 6.8; this
-  kernel is 4.14, so they are safe to rely on.
-- **SELinux static symbol exports** (`write_op`, `sel_handle_status_ops`,
-  `policy_rwlock`, `sel_mutex`, etc.) — unnecessary because `CONFIG_KALLSYMS_ALL=y`
-  is already enabled in `surya_defconfig`, and the documentation states that option
-  replaces all of those changes.
+| Piece | Source |
+|---|---|
+| SUSFS core | `Patches/Patch/susfs_patch_to_4.14.patch` |
+| Syscall hooks | `Patches/susfs_inline_hook_patches.sh` |
+
+The core patch is self-contained: it creates `fs/susfs.c` (~1500 lines),
+`include/linux/susfs.h` and `include/linux/susfs_def.h`, and modifies 16
+existing files. Nothing needs to be cloned from susfs4ksu itself.
+
+> Note: the shell script prints `Current susfs patch version:2.2.00`, but that
+> label is stale. The patched `include/linux/susfs.h` declares `v2.3.0`, and that
+> is what ReSukiSU's Kbuild reads and reports.
+
+### Hunks that need manual fixing
+
+Two hunks of the core patch do not apply to this tree. Both are expected — the
+build repo upstream even ships a `.rej` collection step for exactly this.
+
+**`fs/proc/cmdline.c`** — this tree carries the `CONFIG_INITRAMFS_IGNORE_SKIP_FLAG`
+handling that Xiaomi/LineageOS added, so the patch context does not match. The
+fix is to insert the extern block after the includes and the spoof check at the
+top of `cmdline_proc_show()`, ahead of the `INITRAMFS` block.
+
+**`fs/namei.c` hunk 21** — the patch was written against a tree with the
+three-argument `vfs_open(&path, file, current_cred())`; this tree has the
+two-argument `vfs_open(&path, file)`. Re-apply the hunk by hand, keeping the
+local signature.
+
+This second one is **not optional**. Hunk 21 declares `old_dfd` and
+`fake_filename` in `do_tmpfile()`, `do_o_path()` and `path_openat()`, while hunk
+22 applies cleanly and *uses* those variables inside `path_openat()`. Skipping
+hunk 21 leaves the tree referencing undeclared variables, and the build fails.
 
 ### Verification
 
@@ -162,18 +203,23 @@ ReSukiSU runs a hook checker at compile time and fails the build if anything doe
 match. All of them passed:
 
 ```
--- ReSukiSU/manual_hook: ksu_handle_execveat found
--- ReSukiSU/manual_hook: ksu_handle_faccessat found
--- ReSukiSU/manual_hook: ksu_handle_stat found
--- ReSukiSU/manual_hook: ksu_handle_newfstat_ret found
--- ReSukiSU/manual_hook: ksu_handle_fstat64_ret found
--- ReSukiSU/manual_hook: ksu_handle_sys_reboot found
+-- ReSukiSU: using SuSFS Inline hook
+-- ReSukiSU/susfs_inline: ksu_handle_setresuid found
+-- ReSukiSU/susfs_inline: ksu_handle_execveat found
+-- ReSukiSU/susfs_inline: ksu_handle_faccessat found
+-- ReSukiSU/susfs_inline: ksu_handle_sys_read found
+-- ReSukiSU/susfs_inline: ksu_handle_stat found
+-- ReSukiSU/susfs_inline: ksu_handle_sys_reboot found
+-- ReSukiSU/susfs_inline: ksu_handle_input_handle_event found
+-- SUSFS_VERSION: v2.3.0
 ```
 
 Version embedded in the kernel: `v4.2.0-rc1-88695111@ReSukiSU`.
 
 After flashing, install the ReSukiSU **manager APK** from its
 [official releases](https://github.com/ReSukiSU/ReSukiSU/releases) to manage root.
+SUSFS itself is configured from userspace with the `susfs` binary or a manager
+that supports it; the kernel side only provides the mechanism.
 
 ## Issues you have to work around
 
