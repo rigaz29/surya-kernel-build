@@ -1,0 +1,73 @@
+kallsyms: hide the ksu/susfs symbols that SUSFS's prefix filter misses
+
+SUSFS's CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS filter in kernel/kallsyms.c
+uses susfs_starts_with(), so it only catches names that BEGIN with one of its
+prefixes. On this tree that leaves 18 KSU/SUSFS symbols visible in
+/proc/kallsyms, verified on-device:
+
+  # embedded, not prefixed -> missed by susfs_starts_with()
+  __func__.susfs_init, __func__.susfs_show_version, __func__.susfs_show_variant,
+  __func__.susfs_is_inode_sus_path, __func__.susfs_start_sdcard_monitor_fn,
+  __func__.susfs_open_redirect_spoof_{do_proc_readlink,show_map_vma_srcu,vfs_statfs},
+  __func__.ksu_handle_umount, anon_ksu_{fops,ioctl,release},
+  check_nnp_nosuid.ksu_sid, do_ksu_load_allow_list, is_ksud_exists,
+  is_task_ksu_domain, setup_ksu_cred, setup_ksu_cred_selinux
+
+The 9 __func__.susfs_* entries are emitted by SUSFS's own SUSFS_LOGI/LOGE
+macros (fs/susfs.c), i.e. SUSFS fails to hide itself; the rest come from the
+ReSukiSU/KernelSU driver.
+
+This adds substring matching in front of the existing prefix list:
+
+  strstr(name, "_ksu") || strstr(name, ".ksu") || strstr(name, "susfs")
+
+It deliberately does NOT match a bare "ksu": that substring also appears inside
+"checksum"/"chksum", and hiding ~60 unrelated symbols (skb_checksum,
+nf_ip_checksum, f2fs_inode_chksum, exfat_calc_chksum16, ...) would itself be a
+detectable anomaly. The "_ksu"/".ksu" anchors match all 18 leaked names and
+zero checksum symbols (both counts verified against the running kernel's
+/proc/kallsyms).
+
+The existing susfs_starts_with() entries are kept: names like "ksud",
+"kernelsu", "getenforce", "setenforce", "try_umount", "is_zygote" contain
+neither "ksu" nor "susfs" and still need prefix matching.
+
+<linux/string.h> is included explicitly for strstr(); the file did not pull it
+in directly before.
+
+NOTE: not applied to the tree. Apply with:
+  patch -p1 < patches/0001-susfs-hide-remaining-ksu-susfs-symbols-from-kallsyms.patch
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+--- a/kernel/kallsyms.c	2026-09-06 16:49:48.635486625 +0000
++++ b/kernel/kallsyms.c	2026-09-06 16:49:48.668486736 +0000
+@@ -24,6 +24,7 @@
+ #include <linux/filter.h>
+ #include <linux/compiler.h>
+ #ifdef CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
++#include <linux/string.h>
+ #include <linux/susfs_def.h>
+ #endif // #ifdef CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+ 
+@@ -621,7 +622,20 @@
+ 			   iter->type, iter->name);
+ #else
+ 	{
+-		if (susfs_starts_with(iter->name, "ksu_") ||
++		/*
++		 * Prefix matching alone misses symbols that merely embed the
++		 * ksu/susfs names, e.g. compiler-generated "__func__.susfs_*"
++		 * and "anon_ksu_*", "do_ksu_*", "is_task_ksu_*", "is_ksud_*".
++		 *
++		 * Match "_ksu" and ".ksu" rather than a bare "ksu": the latter
++		 * also occurs inside "checksum"/"chksum", which would hide ~60
++		 * unrelated symbols (skb_checksum, nf_ip_checksum, f2fs_inode_chksum,
++		 * exfat_calc_chksum16, ...). Their absence is itself a signal.
++		 */
++		if (strstr(iter->name, "_ksu") ||
++			strstr(iter->name, ".ksu") ||
++			strstr(iter->name, "susfs") ||
++			susfs_starts_with(iter->name, "ksu_") ||
+ 			susfs_starts_with(iter->name, "__ksu_") ||
+ 			susfs_starts_with(iter->name, "susfs_") ||
+ 			susfs_starts_with(iter->name, "ksud") ||
