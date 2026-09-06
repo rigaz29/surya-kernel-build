@@ -1,0 +1,6 @@
+release/
+out/
+*.zip
+anykernel/Image.gz
+anykernel/dtb
+anykernel/dtbo.img
