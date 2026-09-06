@@ -34,3 +34,8 @@ SUSFS's maintained GKI branches.
 Left as an optional patch rather than folded into the tree because it changes
 hiding behaviour that some users may want to audit or tune first. Applying it
 requires a rebuild.
+
+The root cause is upstream SUSFS, so the fix belongs there too. A ready-to-file
+bug report is in [`UPSTREAM_REPORT.md`](UPSTREAM_REPORT.md), targeting
+[`simonpunk/susfs4ksu`](https://gitlab.com/simonpunk/susfs4ksu) on GitLab (its
+issue tracker is active; no duplicate exists as of this writing).
