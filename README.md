@@ -13,6 +13,7 @@ Repo ini **tidak** berisi source kernel — hanya resep build, skrip, dan tools.
 | Kernel | Linux 4.14.357 (ELTS / OpenELA) |
 | Source | [`rigaz29/kernel_xiaomi_surya`](https://github.com/rigaz29/kernel_xiaomi_surya), branch `seventeen` |
 | Upstream | [`LineageOS/android_kernel_qcom_sm8150`](https://github.com/LineageOS/android_kernel_qcom_sm8150), branch `lineage-20` |
+| Root | [ReSukiSU](https://github.com/ReSukiSU/ReSukiSU) `v4.2.0-rc1-88695111`, manual hook |
 
 ## Isi repo
 
@@ -103,6 +104,70 @@ BLOCK=/dev/block/bootdevice/by-name/boot
 IS_SLOT_DEVICE=0        # surya non-A/B
 do.devicecheck=1
 ```
+
+## Integrasi ReSukiSU
+
+Kernel ini sudah terintegrasi dengan [ReSukiSU](https://github.com/ReSukiSU/ReSukiSU)
+(turunan KernelSU) mengikuti [dokumentasi resminya](https://resukisu.org/guide/manual-integrate.html).
+
+Driver-nya **tidak** ikut di-commit ke tree kernel. `build.sh` mengambilnya lewat
+`kernel/setup.sh` resmi dan **mem-pin commit** `88695111` (override dengan `KSU_COMMIT=`),
+supaya hasil build tetap reproducible walau branch `main` upstream bergerak.
+
+### Kenapa manual hook
+
+| Metode | Dipakai? | Alasan |
+|---|---|---|
+| `KSU_TRACEPOINT_HOOK` | tidak | hanya untuk GKI2 (kernel 5.10+) |
+| `KSU_MANUAL_HOOK` | **ya** | mendukung kernel 3.4+, cocok untuk 4.14 non-GKI |
+| `KSU_SUSFS` | tidak | upstream menyatakan SUSFS tidak lagi mendukung NonGKI tanpa backport manual dari branch `gki-android12-5.10` |
+
+Opsi defconfig yang ditambahkan:
+
+```
+# ReSukiSU
+CONFIG_KSU=y
+CONFIG_KSU_MANUAL_HOOK=y
+```
+
+### Hook yang dipatch manual
+
+| File | Fungsi | Hook |
+|---|---|---|
+| `fs/stat.c` | `newfstatat`, `fstatat64` | `ksu_handle_stat` |
+| `fs/stat.c` | `newfstat` | `ksu_handle_newfstat_ret` |
+| `fs/stat.c` | `fstat64` | `ksu_handle_fstat64_ret` |
+| `fs/exec.c` | `do_execveat_common` | `ksu_handle_execveat` (varian 3.14+) |
+| `fs/open.c` | `SYSCALL_DEFINE3(faccessat)` | `ksu_handle_faccessat` (varian 4.19-) |
+| `kernel/reboot.c` | `SYSCALL_DEFINE4(reboot)` | `ksu_handle_sys_reboot` (varian 3.11+) |
+
+### Yang sengaja TIDAK dipatch manual
+
+- **setuid**, **sys_read**, **input** — ditangani otomatis oleh `KSU_MANUAL_HOOK_AUTO_SETUID_HOOK`,
+  `..._AUTO_INITRC_HOOK`, dan `..._AUTO_INPUT_HOOK` (semua default `y`). Auto-hook LSM ini hanya
+  invalid untuk kernel >= 6.8; kernel kita 4.14, jadi aman.
+- **Static symbol export SELinux** (`write_op`, `sel_handle_status_ops`, `policy_rwlock`,
+  `sel_mutex`, dll.) — tidak perlu karena `CONFIG_KALLSYMS_ALL=y` sudah aktif di
+  `surya_defconfig`, dan dokumentasi menyebut opsi itu menggantikan seluruh perubahan tersebut.
+
+### Verifikasi
+
+ReSukiSU menjalankan pemeriksa hook saat kompilasi dan menggagalkan build bila ada yang
+tidak cocok. Semua lolos:
+
+```
+-- ReSukiSU/manual_hook: ksu_handle_execveat found
+-- ReSukiSU/manual_hook: ksu_handle_faccessat found
+-- ReSukiSU/manual_hook: ksu_handle_stat found
+-- ReSukiSU/manual_hook: ksu_handle_newfstat_ret found
+-- ReSukiSU/manual_hook: ksu_handle_fstat64_ret found
+-- ReSukiSU/manual_hook: ksu_handle_sys_reboot found
+```
+
+Versi yang tertanam di kernel: `v4.2.0-rc1-88695111@ReSukiSU`.
+
+Setelah flash, pasang **manager APK** ReSukiSU dari
+[rilis resminya](https://github.com/ReSukiSU/ReSukiSU/releases) untuk mengelola root.
 
 ## Kendala yang harus diatasi
 

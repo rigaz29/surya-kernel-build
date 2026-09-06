@@ -13,6 +13,18 @@ JOBS="${JOBS:-$(nproc)}"
 
 [ -d "$KERNEL_DIR" ] || { echo "!! KERNEL_DIR tidak ada: $KERNEL_DIR"; exit 1; }
 
+# --- ReSukiSU ----------------------------------------------------------------
+# Driver-nya TIDAK di-commit ke tree kernel; diambil di sini dan di-pin ke commit
+# yang sudah teruji supaya hasil build tetap reproducible.
+KSU_COMMIT="${KSU_COMMIT:-88695111}"
+if grep -q '^CONFIG_KSU=y' "$KERNEL_DIR/arch/arm64/configs/$DEFCONFIG" 2>/dev/null \
+   && [ ! -f "$KERNEL_DIR/drivers/kernelsu/Makefile" ]; then
+  echo ">> Menyiapkan ReSukiSU ($KSU_COMMIT)"
+  ( cd "$KERNEL_DIR" && curl -LSs \
+      "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" \
+      | bash -s "$KSU_COMMIT" )
+fi
+
 # --- toolchain ---------------------------------------------------------------
 if [ ! -x "$TC_DIR/bin/clang" ]; then
   echo ">> Mengunduh Proton Clang ke $TC_DIR (~1.6 GB, sekali saja)"
