@@ -15,6 +15,7 @@ This repo does **not** contain the kernel source — only the build recipe, scri
 | Upstream | [`LineageOS/android_kernel_qcom_sm8150`](https://github.com/LineageOS/android_kernel_qcom_sm8150), branch `lineage-20` |
 | Root | [ReSukiSU](https://github.com/ReSukiSU/ReSukiSU) `v4.2.0-rc1-88695111`, SUSFS inline hooks |
 | Hiding | [SUSFS](https://gitlab.com/simonpunk/susfs4ksu) `v2.3.0` (non-GKI 4.14 backport) |
+| Systemless mount | [NoMount](https://github.com/maxsteeel/nomount) `v20` (built-in, `CONFIG_NOMOUNT=y`) |
 
 ## Repo layout
 
@@ -220,6 +221,44 @@ After flashing, install the ReSukiSU **manager APK** from its
 [official releases](https://github.com/ReSukiSU/ReSukiSU/releases) to manage root.
 SUSFS itself is configured from userspace with the `susfs` binary or a manager
 that supports it; the kernel side only provides the mechanism.
+
+## NoMount integration
+
+[NoMount](https://github.com/maxsteeel/nomount) (`v20`, pinned to master
+`0c4b2db`) is a VFS path-redirection framework — a systemless-mount alternative
+to Magic Mount / OverlayFS. Instead of touching the mount table, it hijacks
+inode/file/super operation vtables in RAM, so injected files leave nothing in
+`/proc/mounts`. It runs as a KernelSU/APatch metamodule and is driven from
+userspace over the keyring (`add_key`) via the `nm` binary.
+
+Legacy kernels (<5.10) cannot load NoMount's prebuilt LKMs, so built-in
+integration is the supported path here.
+
+| | |
+|---|---|
+| Source | fetched by `build.sh` (pin with `NM_COMMIT=`) |
+| Wiring | `fs/nomount` symlink + `fs/Kconfig` + `fs/Makefile` (official `kernel/setup.sh`) |
+| Defconfig | `CONFIG_NOMOUNT=y` |
+
+### Does not conflict with SUSFS
+
+This is the key point for stacking it on top of the SUSFS work. NoMount swaps
+operation vectors at **runtime** and patches **no core VFS source files** — its
+entire kernel side is `fs/nomount/`. SUSFS, by contrast, patches `namei.c`,
+`stat.c`, `namespace.c`, etc. Because they touch different things at the source
+level, integrating both is additive; there are no overlapping hunks.
+
+At runtime both operate on the VFS through different mechanisms (SUSFS via its
+patched hooks, NoMount via vtable hijack). They are commonly stacked in the
+modding scene, but this build has not been runtime-tested with both active at
+once — see the note below.
+
+### 4.14 compatibility
+
+NoMount's headers carry `LINUX_VERSION_CODE` guards down to pre-5.2 (idmap,
+`iterate_shared` vs `iterate`, inode-time layout, actor return type), and
+`rb_root_cached` — used by its rule rbtree — has existed since 4.14. It compiles
+clean on this tree (0 warnings).
 
 ## Issues you have to work around
 
